@@ -1,0 +1,6 @@
+#!/bin/bash
+
+source .env
+
+sbcl --load recategorize.lisp
+

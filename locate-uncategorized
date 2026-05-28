@@ -1,0 +1,14 @@
+#!/bin/bash
+
+source .env
+
+curl -s -X POST "http://localhost:8086/api/v2/query?org=my-org" \
+  -H "Authorization: Token $INFLUX_TOKEN" \
+  -H "Content-Type: application/vnd.flux" \
+  -d 'from(bucket: "banking")
+  |> range(start: -365d)
+  |> filter(fn: (r) => r._measurement == "bank_transaction")
+  |> filter(fn: (r) => r._field == "description")
+  |> filter(fn: (r) => r.category == "other")
+  |> distinct(column: "_value")' | grep "_result" | awk -F',' '{print $NF}' | sort -u
+
