@@ -1,8 +1,13 @@
 ;;;; bank-csv-to-influx.lisp
 ;;;;
 ;;;; This code was written by Claude (https://claude.ai), Anthropic's AI assistant,
-;;;; through an iterative conversation with a human operator — the human ran the
-;;;; code, the AI wrote it.
+;;;; through an iterative conversation with:
+;;;;
+;;;;   Sean Watkins  |  sean.watkins@gmail.com
+;;;;   https://www.linkedin.com/in/sean-w-b981934/
+;;;;   https://www.strava.com/athletes/35611001
+;;;;
+;;;; Sean ran the code, the AI wrote it.
 ;;;;
 ;;;; Watches a directory for CSV bank transaction files, parses them, and writes
 ;;;; transactions to InfluxDB for Grafana dashboards.
@@ -131,11 +136,14 @@
 
 (defun categorize (description)
   "Return a category string for DESCRIPTION by matching against loaded rules."
-  (let ((rules (load-category-rules)))
-    (loop for (pattern . category) in rules
-          when (cl-ppcre:scan pattern description)
-            return category
-          finally (return "other"))))
+  (let* ((rules (load-category-rules))
+         (category (loop for (pattern . cat) in rules
+                         when (cl-ppcre:scan pattern description)
+                           return cat
+                         finally (return "other"))))
+    (when (string= category "other")
+      (format t "~&[UNCATEGORIZED] ~A~%" description))
+    category))
 
 ;;; ──────────────────────────────────────────────────────────────────
 ;;; 4.  CSV parsing utilities

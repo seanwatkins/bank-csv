@@ -1,7 +1,13 @@
 ;;;; recategorize.lisp
 ;;;;
 ;;;; This code was written by Claude (https://claude.ai), Anthropic's AI assistant,
-;;;; through an iterative conversation — the human ran the code, the AI wrote it.
+;;;; through an iterative conversation with:
+;;;;
+;;;;   Sean Watkins  |  sean.watkins@gmail.com
+;;;;   https://www.linkedin.com/in/sean-w-b981934/
+;;;;   https://www.strava.com/athletes/35611001
+;;;;
+;;;; Sean ran the code, the AI wrote it.
 ;;;;
 ;;;; Re-categorizes existing bank_transaction records in InfluxDB by:
 ;;;;   1. Reading all transactions (amount + description + existing tags)
@@ -119,10 +125,6 @@
     (when (null response)
       (return-from fetch-all-transactions nil))
 
-    ;; Debug — show first 500 chars of response
-    (format t "~&[DEBUG] Response preview: ~A~%"
-            (subseq response 0 (min 500 (length response))))
-
     (let* ((lines   (cl-ppcre:split "\\n|\\r\\n" response))
            (headers nil)
            (results '()))
@@ -131,16 +133,14 @@
           (cond
             ((string= clean "") nil)
             ((cl-ppcre:scan "^#" clean) nil)
-            ;; header row — contains _time
             ((and (null headers) (cl-ppcre:scan "_time" clean))
-             (setf headers (parse-csv-line clean))
-             (format t "~&[DEBUG] Headers: ~{~A~^, ~}~%" headers))
-            ;; data rows — start with comma
+             (setf headers (mapcar (lambda (h) (string-trim " " h))
+                                   (parse-csv-line clean))))
             ((and headers (cl-ppcre:scan "^," clean))
              (let* ((fields (parse-csv-line clean))
                     (row    (loop for h in headers
                                   for v in fields
-                                  collect (cons h v))))
+                                  collect (cons h (string-trim " " v)))))
                (push row results))))))
       (format t "~&[INFO] Fetched ~A transaction rows~%" (length results))
       (nreverse results))))
