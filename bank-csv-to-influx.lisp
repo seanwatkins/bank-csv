@@ -473,11 +473,88 @@
                                           "T" (:hour 2) (:min 2) (:sec 2))))
 
 ;;; ──────────────────────────────────────────────────────────────────
-;;; 10. Process a single CSV file
+;;; 9b. Duplicate detection
+;;;
+;;;  Queries InfluxDB for existing transactions in the same date range
+;;;  and account as the CSV being imported. Filters out any transaction
+;;;  whose date+account+amount+description already exists.
 ;;; ──────────────────────────────────────────────────────────────────
 
+(defun influx-query (flux)
+  "Run a Flux query and return the raw CSV response string."
+  (handler-case
+      (dex:post (format nil "~A/api/v2/query?org=~A"
+                        *influx-url* (url-encode *influx-org*))
+                :headers `(("Authorization" . ,(format nil "Token ~A" *influx-token*))
+                           ("Content-Type"  . "application/vnd.flux")
+                           ("Accept"        . "application/csv"))
+                :content flux)
+    (error (e)
+      (format t "~&[WARN] Duplicate check query failed: ~A — importing all rows~%" e)
+      nil)))
+
+(defun fetch-existing-keys (account start-ns end-ns)
+  "Return a hash set of 'timestamp-ns|amount' strings already in InfluxDB
+   for ACCOUNT between START-NS and END-NS."
+  (let ((keys (make-hash-table :test #'equal))
+        (start-s (floor start-ns 1000000000))
+        (end-s   (ceiling end-ns 1000000000)))
+    (let* ((flux (format nil
+                         "from(bucket: ~S)
+  |> range(start: ~A, stop: ~A)
+  |> filter(fn: (r) => r._measurement == \"bank_transaction\")
+  |> filter(fn: (r) => r._field == \"amount\")
+  |> filter(fn: (r) => r.account == ~S)
+  |> keep(columns: [\"_time\", \"_value\"])"
+                         *influx-bucket*
+                         (local-time:format-timestring
+                           nil (local-time:unix-to-timestamp start-s)
+                           :format local-time:+iso-8601-format+)
+                         (local-time:format-timestring
+                           nil (local-time:unix-to-timestamp (1+ end-s))
+                           :format local-time:+iso-8601-format+)
+                         account))
+           (response (influx-query flux)))
+      (when response
+        (dolist (line (cl-ppcre:split "\\n|\\r\\n" response))
+          (let ((clean (string-trim '(#\Space #\Return #\Tab) line)))
+            (when (cl-ppcre:scan "^," clean)
+              (let ((fields (cl-ppcre:split "," clean)))
+                ;; fields: ,_result,table,_time,_value
+                (when (>= (length fields) 5)
+                  (let ((ts  (string-trim " " (nth 3 fields)))
+                        (amt (string-trim " " (nth 4 fields))))
+                    (when (and (not (string= ts "")) (not (string= amt "")))
+                      (setf (gethash (format nil "~A|~A" ts amt) keys) t))))))))))
+    keys))
+
+(defun deduplicate-transactions (transactions)
+  "Remove transactions already present in InfluxDB. Returns filtered list."
+  (when (null transactions) (return-from deduplicate-transactions nil))
+  (let* ((account   (transaction-account (first transactions)))
+         (min-ns    (reduce #'min transactions :key #'transaction-date-ns))
+         (max-ns    (reduce #'max transactions :key #'transaction-date-ns))
+         (existing  (fetch-existing-keys account min-ns max-ns))
+         (total     (length transactions))
+         (new-txns  (remove-if
+                      (lambda (tx)
+                        (let* ((ts  (local-time:format-timestring
+                                      nil (local-time:unix-to-timestamp
+                                            (floor (transaction-date-ns tx) 1000000000))
+                                      :format local-time:+iso-8601-format+))
+                               (amt (format nil "~,4F" (transaction-amount tx)))
+                               (key (format nil "~A|~A" ts amt)))
+                          (gethash key existing)))
+                      transactions))
+         (dupes (- total (length new-txns))))
+    (when (> dupes 0)
+      (format t "~&[INFO] Skipped ~A duplicate transaction(s) already in InfluxDB.~%" dupes))
+    (format t "~&[INFO] ~A new transaction(s) to import.~%" (length new-txns))
+    new-txns))
+
 (defun process-csv-file (path)
-  "Parse CSV file at PATH, write transactions to InfluxDB, move to imported or failed dir."
+  "Parse CSV file at PATH, deduplicate against InfluxDB, write new transactions,
+   move to imported or failed dir."
   (format t "~&[INFO] Processing: ~A~%" (file-namestring path))
   (handler-case
       (let* ((rows         (read-csv-file path))
@@ -486,17 +563,24 @@
             (progn
               (format t "~&[INFO] Parsed ~A transactions from ~A~%"
                       (length transactions) (file-namestring path))
-              ;; Print a sample
               (let ((sample (first transactions)))
                 (format t "~&[INFO] Sample: ~A | ~A | $~,2F | ~A~%"
                         (transaction-date-str sample)
                         (transaction-description sample)
                         (transaction-amount sample)
                         (transaction-category sample)))
-              (let ((lines (transactions->line-protocol transactions)))
-                (if (write-to-influx lines)
-                    (move-file path *imported-dir* (timestamp-suffix))
-                    (move-file path *failed-dir*   (timestamp-suffix)))))
+              ;; Deduplicate against existing InfluxDB data
+              (let* ((new-txns (deduplicate-transactions transactions))
+                     (lines    (when new-txns
+                                 (transactions->line-protocol new-txns))))
+                (cond
+                  ((null new-txns)
+                   (format t "~&[INFO] All transactions already imported — moving to imported/.~%")
+                   (move-file path *imported-dir* (timestamp-suffix)))
+                  ((write-to-influx lines)
+                   (move-file path *imported-dir* (timestamp-suffix)))
+                  (t
+                   (move-file path *failed-dir* (timestamp-suffix))))))
             (progn
               (format t "~&[WARN] No transactions parsed from ~A~%" (file-namestring path))
               (move-file path *failed-dir* (timestamp-suffix)))))
