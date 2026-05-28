@@ -1,0 +1,64 @@
+# bank-categories.txt
+#
+# Merchant categorization rules for bank-csv-to-influx.lisp
+#
+# Format:  category:regex
+# - One rule per line, # = comment, blank lines ignored
+# - First matching rule wins — put specific rules before general ones
+# - Case-insensitive automatically
+#
+# Written by Claude (https://claude.ai) — the human ran the code, the AI wrote it.
+
+# ── Credit card payments (before financial catch-all) ─────────────────
+financial:payment.*thank you|thank you.*payment|interest charge|5401098
+
+# ── Fuel ──────────────────────────────────────────────────────────────
+fuel:petro.?can|shell|esso|husky|co-op.*gas|fas.*gas|pioneer.*gas|ultramar|chevron|7-eleven.*gas|mohawk|irving oil
+
+# ── Groceries ─────────────────────────────────────────────────────────
+groceries:safeway|sobeys|co-op.*food|superstore|wal.?mart|costco|save.?on|iga|loblaws|metro|no frills|fresh co|food basics|farm boy|buy low|calg co-op|hong kong food|morning sun health|fcl.*market|420 premium market|rcss
+
+# ── Restaurants / cafes / delivery ────────────────────────────────────
+restaurants:mcdonald|tim horton|starbucks|subway|pizza|burger|a&w|wendy|dairy queen|\bdq\b|kfc|popeye|fresco|analog|earls|boston pizza|joey|cactus club|moxie|milestones|denny|ihop|brown bag|second cup|orange julius|booster juice|sushi|thai|greek|indian kitchen|szechuan|noodle|pho |ramen|tacqueria|taco|donair|shawarma|mediterranean|vietnamese|japanese|doordash|skipthedishes|uber.*eat|chick pea|hankki|opa!|pure saigon|stockman|bar the brother|brothers.*bar|autogrill|cocciuto|dodec|giolitti|fizz|sq \*civic|sq \*local|sq \*deville|sq \*analog|sp trmnl|cad soda|vending|four20|luxx.*lounge|terme|hotshop|gdp\*
+
+# ── Personal care / beauty ────────────────────────────────────────────
+personal_care:distilled beauty|salon|spa|barber|hair|beauty bar|nail|laser|massage|wax|lash|brow
+
+# ── Utilities ─────────────────────────────────────────────────────────
+utilities:atco|enmax|telus|shaw|rogers|bell|fortis|epcor|direct energy|just energy|atac tap
+
+# ── Insurance ─────────────────────────────────────────────────────────
+insurance:intact|cooperators|wawanesa|belair|aviva|state farm|allstate|insurance|sonnet|square one
+
+# ── Medical / dental / pharmacy ───────────────────────────────────────
+medical:pharmacy|shoppers|rexall|london drugs|medicentre|clinic|dental|dentist|optom|hospital|physio|chiro|massage therapy|medical|health|vision|eye care|dr\.|orthodont|farmacia|engagigo
+
+# ── Entertainment / subscriptions ─────────────────────────────────────
+entertainment:netflix|spotify|apple.*sub|apple\.com|google.*play|steam|xbox|playstation|amazon prime|disney|crave|paramount|hulu|youtube|twitch|patreon|audible|kindle|globe.*mail|www\.
+
+# ── Cannabis ──────────────────────────────────────────────────────────
+cannabis:four20|420|cannabis|weed|herb|dispensary|cova|fire & flower|spiritleaf|tweed|aurora|tokyo smoke
+
+# ── Home improvement ──────────────────────────────────────────────────
+home_improvement:home depot|rona|canadian tire|lowes|kent|totem|build|hardware|lumber|plumbing|electrical supply|flooring|tile
+
+# ── Automotive ────────────────────────────────────────────────────────
+automotive:jiffy lube|mr lube|fountain tire|kal tire|napa|lordco|carquest|midas|oil change|auto parts|car wash|speedy|muffler|transmission|windshield
+
+# ── Transport / parking ───────────────────────────────────────────────
+transport:uber|lyft|yyc.*taxi|checker.*cab|transit|ctrain|calgary transit|parking|impark|precise park|sp\+|green p
+
+# ── Travel ────────────────────────────────────────────────────────────
+travel:westjet|air canada|hotel|marriott|hilton|expedia|booking\.com|airbnb|delta|united|american air|via rail|enterprise|budget rent|hertz|avis|national car|alamo|royal kona|resort|bcf.*online|e-mart|towns of italy|t e t srl|autogrill italia|luxxlounge
+
+# ── Clothing / retail ─────────────────────────────────────────────────
+clothing:winners|marshalls|h&m|old navy|gap|banana republic|roots|lululemon|sport chek|atmosphere|reitmans|pennington|thyme|bootlegger|ardene|garage|dynamite|aritzia|zara|uniqlo|forever 21|giant tiger|strides running
+
+# ── Online shopping ───────────────────────────────────────────────────
+shopping:amazon|ebay|etsy|wayfair|best buy|staples|chapters|indigo
+
+# ── Financial / transfers ─────────────────────────────────────────────
+financial:transfer|loan|mortgage|line of credit|investment|rrsp|tfsa|tdwaterhouse|questrade|wealthsimple|paypal|stripe
+
+# ── Catch-all (must be last) ──────────────────────────────────────────
+other:.
