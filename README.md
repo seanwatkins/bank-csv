@@ -1,13 +1,12 @@
-<div align="center">
-
 # 🏦 Bank CSV → InfluxDB Transaction Importer
 
-*Written by [Claude](https://claude.ai) (Anthropic AI) through an iterative conversation with
-[Sean Watkins](https://www.linkedin.com/in/sean-w-b981934/) — Sean ran the code, the AI wrote it.*
-
-📧 [sean.watkins@gmail.com](mailto:sean.watkins@gmail.com) &nbsp;|&nbsp;
-💼 [LinkedIn](https://www.linkedin.com/in/sean-w-b981934/) &nbsp;|&nbsp;
-🚴 [Strava](https://www.strava.com/athletes/35611001)
+> **This code was written by [Claude](https://claude.ai) (Anthropic AI) through an iterative
+> conversation with [Sean Watkins](https://www.linkedin.com/in/sean-w-b981934/) —
+> Sean ran the code, the AI wrote it.**
+>
+> 📧 [sean.watkins@gmail.com](mailto:sean.watkins@gmail.com) &nbsp;|&nbsp;
+> 💼 [LinkedIn](https://www.linkedin.com/in/sean-w-b981934/) &nbsp;|&nbsp;
+> 🚴 [Strava](https://www.strava.com/athletes/35611001)
 
 [![Common Lisp](https://img.shields.io/badge/Common%20Lisp-SBCL-blue?style=flat-square)](https://www.sbcl.org/)
 [![InfluxDB](https://img.shields.io/badge/InfluxDB-2.x-orange?style=flat-square)](https://www.influxdata.com/)
@@ -15,8 +14,6 @@
 
 A Common Lisp program that watches a directory for bank CSV exports, auto-categorizes
 merchants, and writes everything to InfluxDB for Grafana spending dashboards.
-
-</div>
 
 ---
 
