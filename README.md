@@ -1,356 +1,165 @@
-# 🏦 Bank CSV → InfluxDB Transaction Importer
+# bank-csv-to-influx
 
-> **This code was written by [Claude](https://claude.ai) (Anthropic AI) through an iterative
-> conversation with [Sean Watkins](https://www.linkedin.com/in/sean-w-b981934/) —
-> Sean ran the code, the AI wrote it.**
->
-> 📧 [sean.watkins@gmail.com](mailto:sean.watkins@gmail.com) &nbsp;|&nbsp;
-> 💼 [LinkedIn](https://www.linkedin.com/in/sean-w-b981934/) &nbsp;|&nbsp;
-> 🚴 [Strava](https://www.strava.com/athletes/35611001)
+Watches a directory for **Canadian bank CSV exports**, parses them, and writes
+transactions to **InfluxDB** for Grafana spending dashboards.  Includes a
+separate tool (`recategorize.lisp`) to re-apply updated category rules to
+existing data without re-importing the original files.
 
-[![Common Lisp](https://img.shields.io/badge/Common%20Lisp-SBCL-blue?style=flat-square)](https://www.sbcl.org/)
-[![InfluxDB](https://img.shields.io/badge/InfluxDB-2.x-orange?style=flat-square)](https://www.influxdata.com/)
-[![Grafana](https://img.shields.io/badge/Grafana-Dashboard-red?style=flat-square)](https://grafana.com/)
-
-A Common Lisp program that watches a directory for bank CSV exports, auto-categorizes
-merchants, and writes everything to InfluxDB for Grafana spending dashboards.
+Written by Claude (https://claude.ai) with Sean Watkins.
 
 ---
 
-## 📁 Files
+## What it does
+
+1. Polls an inbox directory every 5 seconds for `*.csv` files.
+2. Auto-detects the bank format and parses transactions.
+3. Checks InfluxDB for duplicates — skips rows already imported.
+4. Writes new transactions to InfluxDB as `bank_transaction` measurements,
+   tagged by `account` and `category`.
+5. Moves the file to `imported/` (success) or `failed/` (parse / write error).
+
+---
+
+## Supported CSV formats
+
+| Bank | Format |
+|---|---|
+| TD Bank | Headerless: date, description, debit, credit, balance |
+| Mint export | Header-based with `Transaction Type`, `Category`, `Account Name` |
+| Generic | Header-based: date, description, amount (or separate debit/credit), optional balance |
+| RBC, Scotiabank, CIBC, BMO | Detected via the generic header-based parser |
+
+---
+
+## Requirements
+
+- **SBCL** (Steel Bank Common Lisp)
+- **Quicklisp** with:
+  - `dexador` – HTTP client (InfluxDB writes and queries)
+  - `local-time` – date/time parsing and UTC conversion
+  - `cl-ppcre` – regex for CSV parsing and merchant categorisation
+  - `uiop` – portable filesystem utilities
+- A running **InfluxDB v2** instance
+
+---
+
+## Directory layout
+
+```
+/tmp/bank-csv/        (default root, override via env vars)
+  inbox/              drop CSV files here
+  imported/           successfully imported files land here (timestamped)
+  failed/             files that could not be parsed or written
+```
+
+The inbox also contains the supporting scripts:
 
 | File | Purpose |
-|------|---------|
-| `bank-csv-to-influx.lisp` | Main importer — watches inbox, parses CSVs, writes to InfluxDB |
-| `recategorize.lisp` | Re-categorizes existing data when rules change — no re-import needed |
-| `bank-categories.txt` | Merchant category rules — edit this file to fix categorization |
-| `bank-csv-importer.service` | systemd service file for running as a background service |
+|---|---|
+| `bank-csv-to-influx.lisp` | Main importer — watches inbox and writes to InfluxDB |
+| `recategorize.lisp` | Re-applies updated category rules to all existing InfluxDB records |
+| `bank-categories.txt` | Merchant-to-category mapping rules (one rule per line) |
+| `run` | Shell wrapper to launch the importer |
+| `run-q` | Shell wrapper for a quiet / background run |
+| `locate-uncategorized` | Helper to find transactions still tagged `other` |
+| `recategorize` | Shell wrapper for `recategorize.lisp` |
+| `debug-program` | SBCL debug launcher |
+| `h.lisp` | Shared helper utilities |
 
 ---
 
-## ✨ Features
+## Configuration
 
-- 📂 Watches a directory and imports CSV files **automatically within 5 seconds** of drop
-- 🏦 Auto-detects **TD Bank headerless format** and standard header-based formats
-- 📅 Parses dates in any common format — `YYYY-MM-DD`, `MM/DD/YYYY`, `YYYYMMDD`
-- 🏷️ Category rules loaded from **external `bank-categories.txt`** — edit without restarting
-- 🔄 **Re-categorize existing data** with `recategorize.lisp` — no CSV re-import needed
-- ✅ Moves imported files to `imported/` with timestamp, failed files to `failed/`
-- 🔍 Prints `[UNCATEGORIZED]` for every transaction falling through to `other`
+All paths and InfluxDB connection details are set via environment variables
+(preferred) or by editing the `defparameter` forms near the top of the source.
 
----
-
-## 🔧 Prerequisites
-
-| Tool | Install |
-|------|---------|
-| [SBCL](https://www.sbcl.org/) | `sudo apt install sbcl` |
-| [Quicklisp](https://www.quicklisp.org/) | See quicklisp.org |
-| InfluxDB 2.x | Docker or native install |
-| Grafana | Docker or native install |
-
-**Quicklisp dependencies** (auto-installed on first run):
-`dexador` · `local-time` · `cl-ppcre` · `uiop`
+| Variable | Default | Description |
+|---|---|---|
+| `CSV_WATCH_DIR` | `/tmp/bank-csv/inbox` | Directory to watch for CSV files |
+| `CSV_IMPORTED_DIR` | `/tmp/bank-csv/imported` | Destination for successfully imported files |
+| `CSV_FAILED_DIR` | `/tmp/bank-csv/failed` | Destination for files that failed to import |
+| `INFLUX_URL` | `http://localhost:8086` | InfluxDB base URL |
+| `INFLUX_ORG` | `my-org` | InfluxDB organisation |
+| `INFLUX_BUCKET_BANK` | `banking` | InfluxDB bucket for bank transactions |
+| `INFLUX_TOKEN` | *(required)* | InfluxDB v2 API token |
+| `CATEGORIES_FILE` | `bank-categories.txt` in cwd | Path to the category rules file |
 
 ---
 
-## 🚀 Quick Start
+## Usage
 
-### 1 — Create watch directories
+### Import transactions
 
-```bash
-sudo mkdir -p /var/bank-csv/{inbox,imported,failed}
-sudo chmod 777 /var/bank-csv/inbox
-```
-
-### 2 — Create the InfluxDB bucket
-
-In the InfluxDB UI (`http://localhost:8086`):
-**Load Data → Buckets → Create Bucket** → name it `banking`, retention `0` (keep forever)
-
-### 3 — Set environment variables
+Drop a CSV export from your bank into the inbox directory, then run:
 
 ```bash
-export INFLUX_URL="http://localhost:8086"
-export INFLUX_ORG="my-org"
-export INFLUX_BUCKET_BANK="banking"
-export INFLUX_TOKEN="your-influxdb-token"
-
-# Optional — override default directories
-export CSV_WATCH_DIR="/var/bank-csv/inbox"
-export CSV_IMPORTED_DIR="/var/bank-csv/imported"
-export CSV_FAILED_DIR="/var/bank-csv/failed"
-export CATEGORIES_FILE="/path/to/bank-categories.txt"
-```
-
-### 4 — Run
-
-```bash
+export INFLUX_TOKEN=your_token
 sbcl --load bank-csv-to-influx.lisp
 ```
 
-### 5 — Drop a CSV file
+Or use the included `run` wrapper. The importer loops continuously; press
+`Ctrl-C` to stop.
 
-Name your CSV before dropping it — the filename becomes the `account` tag in Grafana:
+### Re-apply category rules
 
-```bash
-# Good — shows as account=td-chequing in Grafana
-cp ~/Downloads/accountactivity.csv /var/bank-csv/inbox/td-chequing.csv
-```
-
-The importer picks it up within 5 seconds and prints a summary.
-
----
-
-## ⚙️ Configuration
-
-| Parameter | Env var | Default | Description |
-|-----------|---------|---------|-------------|
-| `*watch-dir*` | `CSV_WATCH_DIR` | `/tmp/bank-csv/inbox` | Directory to watch |
-| `*imported-dir*` | `CSV_IMPORTED_DIR` | `/tmp/bank-csv/imported` | Successfully imported |
-| `*failed-dir*` | `CSV_FAILED_DIR` | `/tmp/bank-csv/failed` | Failed imports |
-| `*influx-url*` | `INFLUX_URL` | `http://localhost:8086` | InfluxDB URL |
-| `*influx-org*` | `INFLUX_ORG` | `my-org` | InfluxDB organisation |
-| `*influx-bucket*` | `INFLUX_BUCKET_BANK` | `banking` | InfluxDB bucket |
-| `*influx-token*` | `INFLUX_TOKEN` | — | InfluxDB API token |
-| `*categories-file*` | `CATEGORIES_FILE` | `bank-categories.txt` in cwd | Rules file path |
-| `*poll-interval*` | — | `5` | Seconds between directory scans |
-
----
-
-## 🏦 Supported CSV Formats
-
-| Bank | Date format | Notes |
-|------|-------------|-------|
-| **TD Bank** | `MM/DD/YYYY` | ⚠️ No header row — auto-detected |
-| RBC | `YYYY-MM-DD` | Header row |
-| Scotiabank | `DD/MM/YYYY` | Header row |
-| CIBC | `YYYY-MM-DD` | Header row |
-| BMO | `YYYY-MM-DD` | Header row |
-| Mint export | `MM/DD/YYYY` | Uses Mint's Category column directly |
-| Generic | auto | Any CSV with date / description / amount columns |
-
-> **TD Bank note:** TD exports have no header row. The importer detects this automatically
-> by checking if the first field looks like a date. Column order: `date, description, debit, credit, balance`.
-
----
-
-## 🏷️ Category Rules
-
-Rules live in `bank-categories.txt` and reload on every import — no restart needed.
-
-**Format:** `category:regex` — one per line, `#` = comment, blank lines ignored.
-All regex is automatically case-insensitive. First matching rule wins.
-
-```ini
-# Fuel
-fuel:petro|shell|esso|husky|ultramar
-
-# Groceries
-groceries:safeway|sobeys|wal.?mart|costco
-
-# Catch-all — must be last
-other:.
-```
-
-### Available categories
-
-| Category | Example merchants |
-|----------|------------------|
-| `fuel` | Petro-Canada, Shell, Esso, Husky |
-| `groceries` | Safeway, Sobeys, Walmart, Costco, Co-op |
-| `restaurants` | McDonald's, Tim Hortons, DoorDash, SkipTheDishes |
-| `utilities` | ATCO, ENMAX, TELUS, Shaw, Rogers, Bell |
-| `insurance` | Intact, Cooperators, Wawanesa |
-| `medical` | Shoppers, Rexall, dental, clinics, physio |
-| `entertainment` | Netflix, Spotify, Apple, Steam, Globe & Mail |
-| `cannabis` | Four20, 420 Premium Markets |
-| `home_improvement` | Home Depot, RONA, Canadian Tire |
-| `automotive` | Jiffy Lube, Fountain Tire, Kal Tire |
-| `transport` | Uber, Calgary Transit, parking |
-| `travel` | WestJet, Air Canada, hotels, Alamo, Airbnb |
-| `clothing` | Winners, Sport Chek, Strides Running |
-| `shopping` | Amazon, Best Buy, Chapters |
-| `personal_care` | Salons, spas, beauty bars |
-| `financial` | Credit card payments, transfers, interest |
-| `other` | Catch-all for unmatched transactions |
-
-### Finding uncategorized transactions
-
-Watch the terminal for `[UNCATEGORIZED] MERCHANT NAME` lines during import, or query InfluxDB:
-
-```flux
-from(bucket: "banking")
-  |> range(start: -365d)
-  |> filter(fn: (r) => r._measurement == "bank_transaction")
-  |> filter(fn: (r) => r._field == "description")
-  |> filter(fn: (r) => r.category == "other")
-  |> distinct(column: "_value")
-```
-
----
-
-## 🔄 Recategorizing Existing Data
-
-After editing `bank-categories.txt`, run `recategorize.lisp` to fix all existing records
-**without re-importing CSV files**:
+After editing `bank-categories.txt`, update all existing InfluxDB records:
 
 ```bash
 sbcl --load recategorize.lisp
 ```
 
-The script will:
-1. Fetch all transactions from InfluxDB
-2. Re-run every description through the current rules
-3. Print each transaction that will change category
-4. Ask for `YES` confirmation ← **nothing is changed until you confirm**
-5. Delete old records and rewrite with updated categories in batches of 500
+This fetches every `bank_transaction` record, re-categorises each description
+against the current rules, then deletes and rewrites the entire dataset.
+You will be prompted to type `YES` before any data is modified.
 
 ---
 
-## 🗄️ Data Written to InfluxDB
+## Category rules (`bank-categories.txt`)
+
+Rules are loaded from `bank-categories.txt` (or the path in `CATEGORIES_FILE`).
+
+```
+# Format:  category:regex
+# First matching rule wins — put specific rules before general ones.
+# Lines starting with # and blank lines are ignored.
+# Patterns are automatically made case-insensitive.
+
+fuel:petro.?can|shell|esso
+groceries:safeway|sobeys|superstore
+restaurants:tim horton|starbucks|doordash
+other:.
+```
+
+The built-in file covers common Canadian merchants across categories including
+`fuel`, `groceries`, `restaurants`, `utilities`, `insurance`, `medical`,
+`entertainment`, `travel`, `automotive`, `transport`, `fitness`, `clothing`,
+`shopping`, `home_improvement`, `personal_care`, `financial`, and `other`.
+
+---
+
+## InfluxDB data model
 
 **Measurement:** `bank_transaction`
 
 | Tag | Description |
-|-----|-------------|
-| `account` | From CSV filename — e.g. `td-chequing`, `td-visa` |
-| `category` | Auto-categorized merchant type |
+|---|---|
+| `account` | Derived from the CSV filename (without extension) |
+| `category` | Merchant category matched from `bank-categories.txt` |
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `amount` | float | **Negative = debit/spending · Positive = credit/refund** |
-| `balance` | float | Running balance (if present in CSV) |
-| `description` | string | Original merchant description from bank |
+| Field | Description |
+|---|---|
+| `amount` | Transaction amount (negative = debit, positive = credit) |
+| `description` | Original merchant description string |
+| `balance` | Running balance, if present in the CSV |
 
----
-
-## 📊 Grafana Queries
-
-### Net monthly spending by category
-> Visualization: **Bar chart** · Stacking: **Normal**
-
-```flux
-from(bucket: "banking")
-  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
-  |> filter(fn: (r) => r._measurement == "bank_transaction")
-  |> filter(fn: (r) => r._field == "amount")
-  |> filter(fn: (r) => r.category != "financial")
-  |> map(fn: (r) => ({_time: r._time, _value: r._value * -1.0, _field: r.category}))
-  |> group(columns: ["_field"])
-  |> aggregateWindow(every: 1mo, fn: sum, createEmpty: false)
-```
-
-### Total spend by category for selected period
-> Visualization: **Bar gauge** · Color: **Green-Yellow-Red** · Sort: **Descending**
-
-```flux
-from(bucket: "banking")
-  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
-  |> filter(fn: (r) => r._measurement == "bank_transaction")
-  |> filter(fn: (r) => r._field == "amount")
-  |> filter(fn: (r) => r._value < 0)
-  |> filter(fn: (r) => r.category != "financial")
-  |> map(fn: (r) => ({_time: r._time, _value: r._value * -1.0, _field: r.category}))
-  |> group(columns: ["_field"])
-  |> sum()
-  |> map(fn: (r) => ({_value: r._value, _field: r._field}))
-  |> group()
-```
-
-### Fuel cost per month + cumulative total
-> Add as two queries A/B on the same Time series panel — put B on the right Y axis
-
-**Query A — monthly:**
-```flux
-from(bucket: "banking")
-  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
-  |> filter(fn: (r) => r._measurement == "bank_transaction")
-  |> filter(fn: (r) => r._field == "amount")
-  |> filter(fn: (r) => r._value < 0)
-  |> filter(fn: (r) => r.category == "fuel")
-  |> map(fn: (r) => ({r with _value: r._value * -1.0}))
-  |> group()
-  |> aggregateWindow(every: 1mo, fn: sum, createEmpty: false)
-```
-
-**Query B — cumulative:**
-```flux
-  |> cumulativeSum()   ← append to Query A
-```
-
-### Biggest single transactions
-> Visualization: **Table**
-
-```flux
-from(bucket: "banking")
-  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
-  |> filter(fn: (r) => r._measurement == "bank_transaction")
-  |> filter(fn: (r) => r._field == "amount")
-  |> filter(fn: (r) => r._value < -100)
-  |> sort(columns: ["_value"])
-  |> limit(n: 20)
-```
-
-### Average monthly spend by category
-
-```flux
-from(bucket: "banking")
-  |> range(start: -365d)
-  |> filter(fn: (r) => r._measurement == "bank_transaction")
-  |> filter(fn: (r) => r._field == "amount")
-  |> filter(fn: (r) => r._value < 0)
-  |> filter(fn: (r) => r.category != "financial")
-  |> map(fn: (r) => ({_time: r._time, _value: r._value * -1.0, _field: r.category}))
-  |> group(columns: ["_field"])
-  |> aggregateWindow(every: 1mo, fn: sum, createEmpty: false)
-  |> mean()
-```
+Timestamps are stored in nanoseconds at day precision (midnight UTC of the
+transaction date).
 
 ---
 
-## 🖥️ Running as a System Service
+## Mint export note
 
-```bash
-sudo cp bank-csv-to-influx.lisp /opt/bank-csv/
-sudo cp bank-categories.txt /opt/bank-csv/
-sudo cp bank-csv-importer.service /etc/systemd/system/
-
-# Edit credentials
-sudo nano /etc/systemd/system/bank-csv-importer.service
-
-sudo systemctl daemon-reload
-sudo systemctl enable --now bank-csv-importer
-
-# Watch logs
-sudo journalctl -u bank-csv-importer -f
-```
-
----
-
-## 🔍 Troubleshooting
-
-**File moves to `failed/` immediately**
-The importer prints detected headers — check if `date`, `description`, and `amount`/`debit`/`credit` columns were found. If not, your bank uses non-standard header names.
-
-**TD Bank files not being detected**
-TD exports have no header row. The detector checks if the first field looks like a date and columns 3/4 contain numbers. If your TD export differs, check `td-headerless-p` in the lisp file.
-
-**Everything categorized as `other`**
-Watch the terminal for `[UNCATEGORIZED]` lines during import. Add matching rules to `bank-categories.txt` — they reload on the next import without restarting.
-
-**`recategorize.lisp` fetches 0 transactions**
-Check InfluxDB is running and the token has read access to the `banking` bucket.
-
-**Duplicate transactions**
-InfluxDB uses timestamp + tags as a unique key. The same transaction imported twice with the same filename will overwrite, not duplicate. Different filenames = different `account` tag = different records.
-
----
-
-## 📝 Notes
-
-- The `banking` bucket is **separate from `aeso`** — personal financial data isolated from grid monitoring
-- Set bucket retention to **`0` (infinite)** — transaction history is valuable for year-over-year comparisons
-- **Exclude `financial` from spending charts** — credit card payments and transfers are money movement between accounts, not actual spending
-- **Credits net against debits** when using `sum()` without a negative filter — useful for seeing refunds offset against spending in the same category
-- Mint exported transactions include a `Category` column — the importer uses it directly, preserving your historical Mint categories
+When importing a Mint export, only rows matching the account name
+`TD AEROPLAN VISA INFINITE` are imported.  Mint category labels are mapped to
+the local category scheme via an internal mapping table in `recategorize.lisp`.
+Edit the `*mint-category-map*` parameter to adjust this mapping.
